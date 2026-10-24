@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" viewBox="0 0 720 300" role="img" aria-labelledby="t d">
+<title id="t">Before and after: boot time and RAM use</title>
+<desc id="d">Boot time went from 17.348 s to 5.847 s, 66.3 percent faster, 11.501 s less. RAM in use went down 20 percent.</desc>
+<style>
+.bg{fill:#ffffff}.ink{fill:#14181c}.mute{fill:#5d6870}.track{fill:#e9eef0}.before{fill:#b8c2c8}.after{fill:#0f8b6d}.line{stroke:#d5dde0}
+.h{font:600 17px system-ui,-apple-system,"Segoe UI",sans-serif}.l{font:13px system-ui,-apple-system,"Segoe UI",sans-serif}.n{font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace}.big{font:700 26px system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme:dark){.bg{fill:#0d1117}.ink{fill:#e6edf3}.mute{fill:#8b98a5}.track{fill:#1c242c}.before{fill:#4a5561}.after{fill:#3ccf9f}.line{stroke:#2a333c}}
+</style>
+<rect class="bg" width="720" height="300" rx="10"/>
+<text class="h ink" x="28" y="40">Boot time</text>
+<text class="l mute" x="28" y="72">Before</text>
+<rect class="track" x="100" y="58" width="520" height="20" rx="4"/>
+<rect class="before" x="100" y="58" width="520" height="20" rx="4"/>
+<text class="n ink" x="630" y="73">17.348 s</text>
+<text class="l mute" x="28" y="104">After</text>
+<rect class="track" x="100" y="90" width="520" height="20" rx="4"/>
+<rect class="after" x="100" y="90" width="175" height="20" rx="4"/>
+<text class="n ink" x="285" y="105">5.847 s</text>
+<line class="line" x1="28" y1="140" x2="692" y2="140" stroke-width="1"/>
+<text class="h ink" x="28" y="176">RAM in use</text>
+<text class="l mute" x="28" y="208">Before</text>
+<rect class="before" x="100" y="194" width="520" height="20" rx="4"/>
+<text class="n ink" x="630" y="209">100%</text>
+<text class="l mute" x="28" y="240">After</text>
+<rect class="track" x="100" y="226" width="520" height="20" rx="4"/>
+<rect class="after" x="100" y="226" width="416" height="20" rx="4"/>
+<text class="n ink" x="526" y="241">80%</text>
+<text class="big ink" x="470" y="40" text-anchor="end">−66.3%</text>
+<text class="l mute" x="692" y="40" text-anchor="end">boot, 11.501 s less</text>
+<text class="big ink" x="470" y="176" text-anchor="end">−20%</text>
+<text class="l mute" x="692" y="176" text-anchor="end">RAM in use</text>
+<text class="l mute" x="28" y="284">Measured on a small Ubuntu Server VM (1 vCPU / 2 GB) before and after one run.</text>
+</svg>

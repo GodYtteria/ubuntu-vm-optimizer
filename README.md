@@ -2,6 +2,8 @@
 
 Interactive, reusable cleanup script based on the steps tested on a small Ubuntu Server VM under Proxmox/KVM. It is intended for headless Ubuntu Server machines, including small 1-vCPU / 2-GB RAM VMs. It checks Ubuntu but does not claim every Ubuntu release or server role has been tested.
 
+![Boot time 17.348 s to 5.847 s (66.3% faster) and 20% less RAM in use](docs/before-after.svg)
+
 ## One-click install (Ubuntu Server)
 
 Run on the Ubuntu server:
