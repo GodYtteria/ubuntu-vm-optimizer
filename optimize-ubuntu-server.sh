@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-VERSION="0.0.1"
+VERSION="0.0.2"
 DRY_RUN=false
 ASSUME_YES=false
 DO_LVM=false
 DO_OPTIONAL=true
 DO_SNAP=true
+DO_UPGRADE=true
+INCLUDE_PHASED=false
 LOG_FILE="/var/log/ubuntu-server-optimizer.log"
 
 usage() {
@@ -16,6 +18,8 @@ Usage: sudo ./optimize-ubuntu-server.sh [options]
   --dry-run       Print planned commands/package plan without changing system
   -y, --yes       Skip conservative confirmations only; optional removals still require approval
   --no-snap       Do not offer Snap removal
+  --no-upgrade    Do not offer package upgrades
+  --include-phased Include phased updates in apt upgrade (explicit opt-in)
   --no-optional   Do not offer optional package removal
   --expand-lvm    Offer root LVM expansion if the VG already has free space
   --no-lvm        Do not offer LVM expansion
@@ -55,6 +59,8 @@ while (($#)); do
     --dry-run) DRY_RUN=true ;;
     -y|--yes) ASSUME_YES=true ;;
     --no-snap) DO_SNAP=false ;;
+    --no-upgrade) DO_UPGRADE=false ;;
+    --include-phased) INCLUDE_PHASED=true ;;
     --no-optional) DO_OPTIONAL=false ;;
     --expand-lvm) DO_LVM=true ;;
     --no-lvm) DO_LVM=false ;;
@@ -92,7 +98,31 @@ if systemctl list-unit-files --no-legend motd-news.timer 2>/dev/null | awk '{pri
   run systemctl disable --now motd-news.timer || warn "Could not disable motd-news timer."
 fi
 
-log "3/7: Clean APT cache and review autoremove plan."
+log "3/7: APT update/upgrade, cache cleanup, and autoremove review."
+if $DO_UPGRADE; then
+  log "Refreshing APT package indexes."
+  run apt-get update
+  log "Reviewing available upgrades."
+  if $DRY_RUN; then
+    run apt-get -s upgrade
+  else
+    apt-get -s upgrade 2>&1 | tee -a "$LOG_FILE" || true
+    if $INCLUDE_PHASED; then
+      warn "Including phased updates overrides Ubuntu's staged rollout policy."
+      if confirm_optional "Run apt upgrade including phased updates?"; then
+        run apt-get -o APT::Get::Always-Include-Phased-Updates=true upgrade
+      else
+        log "Skipped phased-inclusive upgrade."
+      fi
+    elif confirm_optional "Install currently offered upgrades with apt-get upgrade? Phased updates remain phased."; then
+      run apt-get upgrade
+    else
+      log "Skipped package upgrades."
+    fi
+  fi
+else
+  log "Package upgrades disabled by --no-upgrade."
+fi
 run apt-get clean
 if $DRY_RUN; then
   echo '[DRY-RUN] apt-get -s autoremove --purge'

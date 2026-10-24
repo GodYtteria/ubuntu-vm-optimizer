@@ -9,7 +9,7 @@ Interactive, reusable cleanup script based on the steps tested on a small Ubuntu
 Run on the Ubuntu server:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.1/optimize-ubuntu-server.sh
+curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.2/optimize-ubuntu-server.sh
 chmod +x optimize-ubuntu-server.sh
 sudo ./optimize-ubuntu-server.sh --dry-run
 sudo ./optimize-ubuntu-server.sh --expand-lvm
@@ -27,6 +27,7 @@ Changed without asking:
 - APT package cache cleared.
 
 Asked before each action (answer `y` to run):
+- `apt-get upgrade` after `apt-get update` and a simulated upgrade plan (phased updates stay phased; skip with `--no-upgrade`, include them with `--include-phased`).
 - `apt autoremove --purge` of unused packages (the plan is shown first).
 - Purge of optional packages if installed: `modemmanager`, `packagekit`, `open-iscsi`, `multipath-tools`.
 - Removal of all Snap apps and `snapd` (skip with `--no-snap`).
@@ -34,12 +35,13 @@ Asked before each action (answer `y` to run):
 
 Never touched: SSH, Tailscale, UFW, core networking, cloud-init. Docker is not installed. CPU and RAM are not changed.
 
-Flags: `--dry-run`, `--no-snap`, `--no-optional`, `--expand-lvm`, `--no-lvm`, `-y` (skips only the first prompt; removals still ask).
+Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optional`, `--expand-lvm`, `--no-lvm`, `-y` (skips only the first prompt; removals still ask).
 
 ## Features
 
 - Sets `multi-user.target` as default (does not uninstall desktop packages).
 - Disables `apport.service` and `motd-news.timer` if present.
+- Runs `apt update`, shows a simulated upgrade plan, and asks before `apt upgrade` (phased updates stay phased unless `--include-phased`).
 - Cleans APT cache and simulates `apt autoremove --purge` before asking.
 - Offers removal of `modemmanager`, `packagekit`, `open-iscsi`, and `multipath-tools`.
 - Offers removal of Snap and all installed Snap applications.
@@ -53,6 +55,8 @@ Flags: `--dry-run`, `--no-snap`, `--no-optional`, `--expand-lvm`, `--no-lvm`, `-
 --dry-run       Print plans without making changes
 -y, --yes       Skip the initial confirmation only; removals and LVM expansion still require approval
 --no-snap       Do not offer Snap removal
+--no-upgrade    Do not offer package upgrades
+--include-phased Include phased updates (explicit opt-in)
 --no-optional   Do not offer optional package removal
 --expand-lvm    Offer root LVM expansion if free VG space exists
 --no-lvm        Do not offer LVM expansion

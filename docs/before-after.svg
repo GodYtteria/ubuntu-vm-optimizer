@@ -29,5 +29,5 @@
 <text class="l mute" x="692" y="40" text-anchor="end">boot, 11.501 s less</text>
 <text class="big ink" x="470" y="176" text-anchor="end">−20%</text>
 <text class="l mute" x="692" y="176" text-anchor="end">RAM in use</text>
-<text class="l mute" x="28" y="284">Measured on a small Ubuntu Server VM (1 vCPU / 2 GB) before and after one run.</text>
+<text class="l mute" x="28" y="284">Measured on an Ubuntu Server VM: 1 vCPU, 2 GB RAM, 32 GB SSD, before and after one run.</text>
 </svg>
