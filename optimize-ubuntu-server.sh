@@ -1,175 +1,169 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
-VERSION="1.0.0"
-REMOVE_SNAP=false
-REMOVE_OPTIONAL_PACKAGES=false
+IFS=$'\n\t'
+VERSION="0.0.1"
 DRY_RUN=false
 ASSUME_YES=false
+DO_LVM=false
+DO_OPTIONAL=true
+DO_SNAP=true
+LOG_FILE="/var/log/ubuntu-server-optimizer.log"
 
 usage() {
-  cat <<'USAGE'
-Ubuntu VM Optimizer
+cat <<'EOF'
+Ubuntu Server Optimizer
+Usage: sudo ./optimize-ubuntu-server.sh [options]
+  --dry-run       Print planned commands/package plan without changing system
+  -y, --yes       Skip conservative confirmations only; optional removals still require approval
+  --no-snap       Do not offer Snap removal
+  --no-optional   Do not offer optional package removal
+  --expand-lvm    Offer root LVM expansion if the VG already has free space
+  --no-lvm        Do not offer LVM expansion
+  -h, --help      Show help
 
-Usage:
-  sudo ./optimize-ubuntu-server.sh [options]
-
-Options:
-  --remove-snap               Remove Snap only after listing installed snaps and confirmation.
-  --remove-optional-packages  Offer to purge ModemManager, PackageKit, open-iscsi,
-                              and multipath-tools (only if you do not use them).
-  --dry-run                   Show planned actions without changing the system.
-  -y, --yes                   Skip confirmation prompts (not recommended for optional removals).
-  -h, --help                  Show this help.
-
-Default actions (conservative):
-  - Set default boot target to multi-user.target (no graphical login target).
-  - Disable Apport crash reporting.
-  - Disable the motd-news timer if present.
-  - Clean APT cache and remove unused dependencies.
-
-Optional package removals can affect systems using cellular modems, PackageKit/software
-management tools, iSCSI, multipath storage, or Snap applications. Inspect the plan first.
-USAGE
+Default interactive run:
+- Check Ubuntu/systemd and show current status
+- Set multi-user.target, disable Apport and motd-news.timer if present
+- Clean APT cache; simulate autoremove and ask before applying
+- Offer removal of Snap/all Snap apps and optional packages
+- Report memory, disk, failed services, enabled services, boot time and slow units
+LVM expansion is OFF by default. It only uses existing free VG space; it does not
+resize the virtual disk, partition or physical volume. Does not install Docker.
+EOF
 }
-
-log() { printf '\n[INFO] %s\n' "$*"; }
-warn() { printf '\n[WARN] %s\n' "$*" >&2; }
-run() {
-  if $DRY_RUN; then
-    printf '[DRY-RUN]'; printf ' %q' "$@"; printf '\n'
-  else
-    "$@"
-  fi
+log(){ printf '\n[INFO] %s\n' "$*" | tee -a "$LOG_FILE"; }
+warn(){ printf '\n[WARN] %s\n' "$*" | tee -a "$LOG_FILE" >&2; }
+die(){ warn "$*"; exit 1; }
+run(){
+  if $DRY_RUN; then printf '[DRY-RUN]'; printf ' %q' "$@"; printf '\n'; else "$@" 2>&1 | tee -a "$LOG_FILE"; fi
 }
-confirm() {
+confirm(){
   local prompt="$1" answer
-  if $ASSUME_YES; then
-    [[ "$prompt" == *"optional packages"* ]] && { warn "--yes does not approve optional package removals; skipping."; return 1; }
-    return 0
-  fi
+  if $DRY_RUN; then printf '[DRY-RUN] Would ask: %s\n' "$prompt"; return 1; fi
+  if $ASSUME_YES; then return 0; fi
   read -r -p "$prompt [y/N] " answer
   [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]
 }
-
+confirm_optional(){
+  local prompt="$1" answer
+  if $DRY_RUN; then printf '[DRY-RUN] Would ask explicit approval: %s\n' "$prompt"; return 1; fi
+  read -r -p "$prompt [y/N] " answer
+  [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]
+}
 while (($#)); do
   case "$1" in
-    --remove-snap) REMOVE_SNAP=true ;;
-    --remove-optional-packages) REMOVE_OPTIONAL_PACKAGES=true ;;
     --dry-run) DRY_RUN=true ;;
     -y|--yes) ASSUME_YES=true ;;
+    --no-snap) DO_SNAP=false ;;
+    --no-optional) DO_OPTIONAL=false ;;
+    --expand-lvm) DO_LVM=true ;;
+    --no-lvm) DO_LVM=false ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
-
-if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-  echo "Run with sudo: sudo $0 [options]" >&2
-  exit 1
-fi
-
-if [[ ! -r /etc/os-release ]]; then
-  echo "Cannot identify operating system." >&2; exit 1
-fi
+[[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run with sudo: sudo $0 [options]"
+[[ -r /etc/os-release ]] || die "Cannot identify operating system."
 # shellcheck disable=SC1091
 source /etc/os-release
-if [[ "${ID:-}" != ubuntu ]]; then
-  echo "This script supports Ubuntu only (detected: ${PRETTY_NAME:-unknown})." >&2
-  exit 1
+[[ "${ID:-}" == ubuntu ]] || die "Ubuntu only. Detected: ${PRETTY_NAME:-unknown}"
+command -v systemctl >/dev/null 2>&1 || die "systemd is required."
+command -v apt-get >/dev/null 2>&1 || die "APT is required."
+mkdir -p /var/log; touch "$LOG_FILE"; chmod 600 "$LOG_FILE" || true
+
+log "Ubuntu Server Optimizer v${VERSION} — ${PRETTY_NAME:-Ubuntu}"
+log "Log file: $LOG_FILE"
+log "No Docker install or VM CPU/RAM changes will be performed."
+log "Create a VM snapshot/backup before changing a production server."
+hostnamectl 2>/dev/null | tee -a "$LOG_FILE" || true
+printf '\n--- memory ---\n' | tee -a "$LOG_FILE"; free -h 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- root filesystem ---\n' | tee -a "$LOG_FILE"; df -h / 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- root source ---\n' | tee -a "$LOG_FILE"; findmnt -no SOURCE,FSTYPE / 2>&1 | tee -a "$LOG_FILE" || true
+if ! $DRY_RUN && ! confirm "Apply conservative headless-server optimizations?"; then log "Cancelled."; exit 0; fi
+
+log "1/7: Set default target to multi-user.target."
+run systemctl set-default multi-user.target
+log "2/7: Disable Apport and motd-news.timer when present."
+if systemctl list-unit-files --no-legend apport.service 2>/dev/null | awk '{print $1}' | grep -qx apport.service; then
+  run systemctl disable --now apport.service || warn "Could not disable Apport."
+fi
+if systemctl list-unit-files --no-legend motd-news.timer 2>/dev/null | awk '{print $1}' | grep -qx motd-news.timer; then
+  run systemctl disable --now motd-news.timer || warn "Could not disable motd-news timer."
 fi
 
-log "Ubuntu VM Optimizer v${VERSION} — detected ${PRETTY_NAME:-Ubuntu}"
-log "Current state:"
-free -h || true
-df -h / || true
-
-log "Plan: set multi-user.target, disable Apport and motd-news timer when available, then clean APT."
-if ! $DRY_RUN && ! confirm "Apply conservative server optimizations?"; then
-  echo "Cancelled."; exit 0
-fi
-
-if command -v systemctl >/dev/null 2>&1; then
-  run systemctl set-default multi-user.target
-  if systemctl list-unit-files apport.service --no-legend 2>/dev/null | grep -q '^apport\.service'; then
-    run systemctl disable --now apport.service || warn "Could not disable apport.service; continuing."
-  fi
-  if systemctl list-unit-files motd-news.timer --no-legend 2>/dev/null | grep -q '^motd-news\.timer'; then
-    run systemctl disable --now motd-news.timer || warn "Could not disable motd-news.timer; continuing."
-  fi
-fi
-
+log "3/7: Clean APT cache and review autoremove plan."
 run apt-get clean
 if $DRY_RUN; then
-  echo "[DRY-RUN] apt-get -s autoremove --purge"
-  apt-get -s autoremove --purge || true
+  echo '[DRY-RUN] apt-get -s autoremove --purge'
+  apt-get -s autoremove --purge 2>&1 || true
 else
-  log "Reviewing unused-package removal plan:"
-  apt-get -s autoremove --purge || true
-  if confirm "Run apt autoremove --purge using the plan above?"; then
-    apt-get autoremove --purge
-  else
-    warn "Skipped autoremove."
-  fi
+  apt-get -s autoremove --purge 2>&1 | tee -a "$LOG_FILE" || true
+  if confirm_optional "Run apt autoremove --purge using the plan above?"; then run apt-get autoremove --purge; else log "Skipped autoremove."; fi
 fi
 
-if $REMOVE_OPTIONAL_PACKAGES; then
+log "4/7: Optional packages."
+if $DO_OPTIONAL; then
   optional=(modemmanager packagekit open-iscsi multipath-tools)
   installed=()
   for pkg in "${optional[@]}"; do
-    if dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null | grep -qx installed; then
-      installed+=("$pkg")
-    fi
+    if dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null | grep -qx installed; then installed+=("$pkg"); fi
   done
   if ((${#installed[@]})); then
-    warn "Optional packages selected for possible removal: ${installed[*]}"
-    warn "Do NOT remove multipath-tools/open-iscsi if your VM depends on multipath or iSCSI storage."
-    if $DRY_RUN; then
-      printf '[DRY-RUN] apt-get purge'; printf ' %q' "${installed[@]}"; printf '\n'
-    elif confirm "Purge these optional packages?"; then
-      apt-get purge "${installed[@]}"
-      if confirm "Remove unused dependencies after optional package removal?"; then
-        apt-get autoremove --purge
-      fi
-    else
-      warn "Skipped optional package removal."
-    fi
-  else
-    log "None of the optional packages are installed."
-  fi
-fi
+    printf 'Installed optional packages: %s\n' "${installed[*]}" | tee -a "$LOG_FILE"
+    warn "Do not remove modemmanager with cellular hardware, open-iscsi with iSCSI, or multipath-tools with multipath storage."
+    if confirm_optional "Purge all listed optional packages (${installed[*]})?"; then
+      run apt-get purge "${installed[@]}"
+      if confirm_optional "Run apt autoremove --purge after optional package removal?"; then run apt-get autoremove --purge; fi
+    else log "Skipped optional package removal."; fi
+  else log "No listed optional packages installed."; fi
+else log "Optional package removal disabled by flag."; fi
 
-if $REMOVE_SNAP; then
-  if ! command -v snap >/dev/null 2>&1; then
-    log "Snap is not installed; skipping Snap removal."
-  else
-    log "Installed Snap packages (review before continuing):"
-    snap list || true
-    warn "Removing Snap will remove ALL installed Snap applications."
-    if $DRY_RUN; then
-      echo "[DRY-RUN] Would remove installed snaps and purge snapd only after explicit confirmation."
-    elif confirm "Remove all installed Snap applications and purge snapd?"; then
-      mapfile -t snap_names < <(snap list 2>/dev/null | awk 'NR>1 {print $1}' | grep -vE '^(snapd|core[0-9]*|bare)$' || true)
-      for name in "${snap_names[@]}"; do
-        snap remove "$name" || warn "Could not remove snap: $name"
-      done
-      mapfile -t remaining_snaps < <(snap list 2>/dev/null | awk 'NR>1 {print $1}' || true)
-      for name in "${remaining_snaps[@]}"; do
-        snap remove "$name" || warn "Could not remove snap: $name"
-      done
-      apt-get purge snapd
-      if confirm "Run apt autoremove --purge after removing Snap?"; then apt-get autoremove --purge; fi
-    else
-      warn "Skipped Snap removal."
-    fi
-  fi
-fi
+log "5/7: Optional Snap removal."
+if $DO_SNAP; then
+  if command -v snap >/dev/null 2>&1 && dpkg-query -W -f='${db:Status-Status}' snapd 2>/dev/null | grep -qx installed; then
+    snap list 2>&1 | tee -a "$LOG_FILE" || true
+    warn "This removes ALL Snap applications; required Snap apps/services will stop working."
+    if confirm_optional "Remove all Snap apps and purge snapd?"; then
+      mapfile -t snap_names < <(snap list 2>/dev/null | awk 'NR>1 {print $1}' | grep -v '^snapd$' || true)
+      for name in "${snap_names[@]}"; do run snap remove "$name" || warn "Could not remove snap $name; continuing."; done
+      run apt-get purge snapd
+      if confirm_optional "Run apt autoremove --purge after Snap removal?"; then run apt-get autoremove --purge; fi
+    else log "Skipped Snap removal."; fi
+  else log "Snap is not installed."; fi
+else log "Snap removal disabled by flag."; fi
 
-log "Final status:"
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl get-default || true
-  systemctl --failed --no-pager || true
-fi
-free -h || true
-df -h / || true
-log "Finished. Review output above; reboot only when convenient to validate startup changes."
+log "6/7: Optional root LVM expansion."
+if $DO_LVM; then
+  if command -v lvs >/dev/null 2>&1 && command -v vgs >/dev/null 2>&1 && command -v lvextend >/dev/null 2>&1; then
+    root_source="$(findmnt -nro SOURCE / 2>/dev/null || true)"
+    root_type="$(findmnt -nro FSTYPE / 2>/dev/null || true)"
+    root_lv=""
+    if [[ "$root_source" == /dev/mapper/* || "$root_source" == /dev/*/* ]]; then
+      while read -r lv; do
+        [[ -n "$lv" ]] || continue
+        if [[ "$(readlink -f "$lv")" == "$(readlink -f "$root_source")" ]]; then root_lv="$lv"; break; fi
+      done < <(lvs --noheadings -o lv_path 2>/dev/null | xargs -n1)
+    fi
+    if [[ -n "$root_lv" ]]; then
+      root_vg="$(lvs --noheadings -o vg_name "$root_lv" 2>/dev/null | xargs || true)"
+      vg_free="$(vgs --noheadings --units b --nosuffix -o vg_free "$root_vg" 2>/dev/null | awk '{printf "%.0f",$1}' || echo 0)"
+      if [[ "${vg_free:-0}" =~ ^[0-9]+$ ]] && (( vg_free > 1048576 )); then
+        log "Root LV: $root_lv; free VG space: ${vg_free} bytes; filesystem: ${root_type:-unknown}"
+        warn "This uses only free space already in the VG; it does not enlarge the VM disk or partition."
+        if confirm_optional "Extend root LV and filesystem using all free VG space?"; then run lvextend -l +100%FREE -r "$root_lv"; else log "Skipped LVM expansion."; fi
+      else log "No meaningful free space in the root VG; skipping."; fi
+    else log "Root is not safely identifiable as an LVM LV; skipping."; fi
+  else log "LVM tools not installed; skipping."; fi
+else log "LVM expansion disabled. Use --expand-lvm to offer it."; fi
+
+log "7/7: Final diagnostics."
+printf '\n--- default target ---\n' | tee -a "$LOG_FILE"; systemctl get-default 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- failed units ---\n' | tee -a "$LOG_FILE"; systemctl --failed --no-pager 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- memory ---\n' | tee -a "$LOG_FILE"; free -h 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- root filesystem ---\n' | tee -a "$LOG_FILE"; df -h / 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- enabled services ---\n' | tee -a "$LOG_FILE"; systemctl list-unit-files --type=service --state=enabled --no-pager 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- boot time ---\n' | tee -a "$LOG_FILE"; systemd-analyze time 2>&1 | tee -a "$LOG_FILE" || true
+printf '\n--- slow startup units (top 20) ---\n' | tee -a "$LOG_FILE"; systemd-analyze blame 2>&1 | head -n 20 | tee -a "$LOG_FILE" || true
+log "Finished. Review $LOG_FILE. Verify changes after reboot during a maintenance window."
+log "Cloud-init, SSH, Tailscale, UFW and core networking were not disabled. Docker was not installed."

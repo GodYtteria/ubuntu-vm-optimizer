@@ -1,60 +1,81 @@
-# Ubuntu VM Optimizer
+# Ubuntu Server Optimizer
 
-A conservative Bash cleanup script for small Ubuntu Server VMs (including 1-vCPU / 2-GB RAM instances). It applies the headless-server changes tested on a VM:
+Interactive, reusable cleanup script based on the steps tested on a small Ubuntu Server VM under Proxmox/KVM. It is intended for headless Ubuntu Server machines, including small 1-vCPU / 2-GB RAM VMs. It checks Ubuntu but does not claim every Ubuntu release or server role has been tested.
 
-- Sets the default systemd target to `multi-user.target`.
-- Disables Apport crash reporting.
-- Disables the `motd-news.timer` when available.
-- Cleans the APT cache and offers to remove unused packages.
-- Reports memory, root filesystem usage, default target, and failed systemd units.
+## One-click install (Ubuntu Server)
 
-Optional flags can remove Snap or packages that are often unnecessary on headless VMs. These removals are **not enabled by default** because they may break a workload that depends on them.
-
-## Requirements
-
-- Ubuntu Linux (the script refuses to run on other distributions)
-- Bash and systemd
-- Root privileges (`sudo`)
-- Network access is not required by the script itself
-
-## Quick install (one copy-paste)
-
-Run on the Ubuntu VM:
+Run on the Ubuntu server:
 
 ```bash
-git clone https://github.com/GodYtteria/ubuntu-vm-optimizer.git && cd ubuntu-vm-optimizer && sudo ./optimize-ubuntu-server.sh --dry-run && sudo ./optimize-ubuntu-server.sh
+git clone https://github.com/GodYtteria/ubuntu-vm-optimizer.git && cd ubuntu-vm-optimizer && git checkout release/0.0.1 && sudo ./optimize-ubuntu-server.sh --dry-run && sudo ./optimize-ubuntu-server.sh
 ```
 
-The first run is a dry run that only prints the plan. The second run applies it and asks for confirmation.
+The first run (`--dry-run`) only prints the plan. The second run applies it and asks before each removal. No `git` on the server? Run `sudo apt-get install -y git` first.
 
-No `git` on the VM? `sudo apt-get install -y git` first.
+## What it removes or changes
 
-## Usage
+Nothing is removed without a prompt, except the settings below.
 
-Review the script before running it. The sections below cover the flags.
+Changed without asking:
+- Default boot target set to `multi-user.target` (desktop packages stay installed).
+- `apport.service` and `motd-news.timer` disabled, if present.
+- APT package cache cleared.
 
-Optional package cleanup (read the APT plan and confirm carefully):
+Asked before each action (answer `y` to run):
+- `apt autoremove --purge` of unused packages (the plan is shown first).
+- Purge of optional packages if installed: `modemmanager`, `packagekit`, `open-iscsi`, `multipath-tools`.
+- Removal of all Snap apps and `snapd` (skip with `--no-snap`).
+- Root LVM expansion into existing free VG space (off unless `--expand-lvm` is given).
+
+Never touched: SSH, Tailscale, UFW, core networking, cloud-init. Docker is not installed. CPU and RAM are not changed.
+
+Flags: `--dry-run`, `--no-snap`, `--no-optional`, `--expand-lvm`, `--no-lvm`, `-y` (skips only the first prompt; removals still ask).
+
+## Features
+
+- Sets `multi-user.target` as default (does not uninstall desktop packages).
+- Disables `apport.service` and `motd-news.timer` if present.
+- Cleans APT cache and simulates `apt autoremove --purge` before asking.
+- Offers removal of `modemmanager`, `packagekit`, `open-iscsi`, and `multipath-tools`.
+- Offers removal of Snap and all installed Snap applications.
+- Can offer to extend the root LVM logical volume if the root is on LVM and the VG already has free space. It does not resize the virtual disk, partition, or physical volume.
+- Reports RAM, disk, failed units, enabled services, boot time, and top 20 slow units.
+- Logs to `/var/log/ubuntu-server-optimizer.log`.
+
+## Options
+
+```text
+--dry-run       Print plans without making changes
+-y, --yes       Skip the initial confirmation only; removals and LVM expansion still require approval
+--no-snap       Do not offer Snap removal
+--no-optional   Do not offer optional package removal
+--expand-lvm    Offer root LVM expansion if free VG space exists
+--no-lvm        Do not offer LVM expansion
+-h, --help      Show help
+```
+
+## GitHub raw install
 
 ```bash
-sudo ./optimize-ubuntu-server.sh --remove-optional-packages
+curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.1/optimize-ubuntu-server.sh
+chmod +x optimize-ubuntu-server.sh
+sudo ./optimize-ubuntu-server.sh --expand-lvm
 ```
 
-Snap removal (removes all installed Snap apps; review `snap list` first):
+Download and inspect the script; run `--dry-run` first. Do not pipe an unreviewed remote script directly to a root shell.
 
-```bash
-sudo ./optimize-ubuntu-server.sh --remove-snap
-```
+## Safety
 
-The `--yes` option skips the main confirmation and APT autoremove confirmation, but deliberately does **not** approve optional package or Snap removals. Avoid unattended execution on production systems.
-
-## Important safety notes
-
-- Make a VM snapshot/backup before making changes to production servers.
-- Do not remove `multipath-tools` if the VM uses multipath storage, or `open-iscsi` if it relies on iSCSI.
-- Do not remove Snap if any required service is installed as a Snap package.
-- The script does not install Docker, change CPU/RAM allocation, tune application settings, or promise a specific performance gain.
-- `multi-user.target` changes the default boot target but does not uninstall desktop packages.
-- `apt autoremove --purge` is reviewed before confirmation; inspect the package list carefully.
+- Create a Proxmox snapshot or backup before production changes.
+- Do not remove `modemmanager` if using cellular modem hardware.
+- Do not remove `open-iscsi` if using iSCSI storage.
+- Do not remove `multipath-tools` if using multipath storage.
+- Do not remove Snap if required applications/services use Snap.
+- Review every APT removal list. `apt autoremove` may remove Ubuntu metapackages (such as `ubuntu-server`) if dependencies are no longer considered required.
+- Cloud-init units are deliberately left alone. They can be important on cloud images and VM templates even if cloud-init currently reports disabled.
+- SSH, Tailscale, UFW, core networking are never disabled.
+- This does not install Docker, tune application/database configuration, change VM CPU/RAM allocation, resize the virtual disk/partition, or guarantee a specific performance gain.
+- The script is interactive by design; it is not intended for blind unattended deployment.
 
 ## License
 
