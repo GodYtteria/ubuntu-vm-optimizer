@@ -7,10 +7,13 @@ Interactive, reusable cleanup script based on the steps tested on a small Ubuntu
 Run on the Ubuntu server:
 
 ```bash
-git clone https://github.com/GodYtteria/ubuntu-vm-optimizer.git && cd ubuntu-vm-optimizer && git checkout release/0.0.1 && sudo ./optimize-ubuntu-server.sh --dry-run && sudo ./optimize-ubuntu-server.sh
+curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.1/optimize-ubuntu-server.sh
+chmod +x optimize-ubuntu-server.sh
+sudo ./optimize-ubuntu-server.sh --dry-run
+sudo ./optimize-ubuntu-server.sh --expand-lvm
 ```
 
-The first run (`--dry-run`) only prints the plan. The second run applies it and asks before each removal. No `git` on the server? Run `sudo apt-get install -y git` first.
+The first run (`--dry-run`) only prints the plan. The second run applies it and asks before each removal. `--expand-lvm` adds the optional LVM question; leave it off to skip it.
 
 ## What it removes or changes
 
@@ -53,16 +56,6 @@ Flags: `--dry-run`, `--no-snap`, `--no-optional`, `--expand-lvm`, `--no-lvm`, `-
 --no-lvm        Do not offer LVM expansion
 -h, --help      Show help
 ```
-
-## GitHub raw install
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.1/optimize-ubuntu-server.sh
-chmod +x optimize-ubuntu-server.sh
-sudo ./optimize-ubuntu-server.sh --expand-lvm
-```
-
-Download and inspect the script; run `--dry-run` first. Do not pipe an unreviewed remote script directly to a root shell.
 
 ## Safety
 
