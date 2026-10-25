@@ -12,10 +12,18 @@ DO_DNS=true
 DNS_ONLY=false
 INCLUDE_PHASED=false
 LOG_FILE="/var/log/ubuntu-server-optimizer.log"
-RESOLVED_DIR="${UVO_RESOLVED_DIR:-/etc/systemd/resolved.conf.d}"
-RESOLVED_RESTART_CMD="${UVO_RESOLVED_RESTART_CMD:-systemctl restart systemd-resolved}"
-RESOLVED_ACTIVE_CMD="${UVO_RESOLVED_ACTIVE_CMD:-systemctl is-active --quiet systemd-resolved}"
-DNS_VERIFY_CMD="${UVO_DNS_VERIFY_CMD:-timeout 10 getent hosts example.com}"
+RESOLVED_DIR="/etc/systemd/resolved.conf.d"
+RESOLVED_RESTART_CMD="systemctl restart systemd-resolved"
+RESOLVED_ACTIVE_CMD="systemctl is-active --quiet systemd-resolved"
+DNS_VERIFY_CMD="dns_default_verify"
+DNS_GLOBAL_CMD="dns_default_global"
+if [[ "${UVO_TEST:-0}" == 1 ]]; then
+  RESOLVED_DIR="${UVO_RESOLVED_DIR:-$RESOLVED_DIR}"
+  RESOLVED_RESTART_CMD="${UVO_RESOLVED_RESTART_CMD:-$RESOLVED_RESTART_CMD}"
+  RESOLVED_ACTIVE_CMD="${UVO_RESOLVED_ACTIVE_CMD:-$RESOLVED_ACTIVE_CMD}"
+  DNS_VERIFY_CMD="${UVO_DNS_VERIFY_CMD:-$DNS_VERIFY_CMD}"
+  DNS_GLOBAL_CMD="${UVO_DNS_GLOBAL_CMD:-$DNS_GLOBAL_CMD}"
+fi
 DNS_CONF='[Resolve]
 DNS=94.140.14.14#dns.adguard-dns.com 94.140.15.15#dns.adguard-dns.com 1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com
 FallbackDNS=8.8.8.8#dns.google 8.8.4.4#dns.google
@@ -69,23 +77,30 @@ confirm_optional(){
   [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]
 }
 dns_run(){ local -a cmd; IFS=' ' read -ra cmd <<<"$1"; "${cmd[@]}"; }
+dns_default_verify(){ timeout 10 resolvectl query --cache=no example.com; }
+dns_default_global(){ resolvectl dns | grep -E '^Global' | grep -q '94\.140\.14\.14'; }
 dns_step(){
-  local conf="$RESOLVED_DIR/dns.conf" backup="$RESOLVED_DIR/dns.conf.bak" tmp="$RESOLVED_DIR/dns.conf.new"
+  local conf="$RESOLVED_DIR/90-uvo-dns.conf" backup="$RESOLVED_DIR/90-uvo-dns.conf.bak" tmp="$RESOLVED_DIR/90-uvo-dns.conf.new" legacy="$RESOLVED_DIR/dns.conf"
   if ! dns_run "$RESOLVED_ACTIVE_CMD" >/dev/null 2>&1; then log "systemd-resolved is not active; skipping DNS step."; return 0; fi
+  if [[ -f "$legacy" && "$(<"$legacy")" == "${DNS_CONF%$'\n'}" ]]; then
+    if $DRY_RUN; then printf '[DRY-RUN] Would remove legacy %s\n' "$legacy"; else rm -f "$legacy" || { warn "Could not remove legacy $legacy"; return 1; }; fi
+  fi
   if [[ -f "$conf" && "$(<"$conf")" == "${DNS_CONF%$'\n'}" ]]; then log "DNS drop-in already up to date."; return 0; fi
   if $DRY_RUN; then printf '[DRY-RUN] Would write %s and restart systemd-resolved\n' "$conf"; return 0; fi
-  mkdir -p "$RESOLVED_DIR"
+  mkdir -p "$RESOLVED_DIR" || { warn "Could not create $RESOLVED_DIR"; return 1; }
   local had_old=false
-  if [[ -f "$conf" ]]; then cp -p "$conf" "$backup"; had_old=true; log "Backed up existing DNS drop-in to $backup"; fi
-  printf '%s' "$DNS_CONF" >"$tmp"; chmod 644 "$tmp"; mv "$tmp" "$conf"
+  if [[ -f "$conf" ]]; then cp -p "$conf" "$backup" || { warn "Could not back up $conf"; return 1; }; had_old=true; log "Backed up existing DNS drop-in to $backup"; fi
+  if ! { printf '%s' "$DNS_CONF" >"$tmp" && chmod 644 "$tmp" && mv "$tmp" "$conf"; }; then
+    rm -f "$tmp"; warn "Could not write $conf; existing DNS configuration left as is."; return 1
+  fi
   dns_run "$RESOLVED_RESTART_CMD" >>"$LOG_FILE" 2>&1 || warn "systemd-resolved restart reported an error."
-  if dns_run "$DNS_VERIFY_CMD" >>"$LOG_FILE" 2>&1; then log "DNS resolvers set and lookup verified."; return 0; fi
+  if dns_run "$DNS_VERIFY_CMD" >>"$LOG_FILE" 2>&1 && dns_run "$DNS_GLOBAL_CMD" >>"$LOG_FILE" 2>&1; then log "DNS resolvers set and lookup verified."; return 0; fi
   if $had_old; then mv "$backup" "$conf"; else rm -f "$conf"; fi
-  dns_run "$RESOLVED_RESTART_CMD" >>"$LOG_FILE" 2>&1 || true
+  dns_run "$RESOLVED_RESTART_CMD" >>"$LOG_FILE" 2>&1 || warn "systemd-resolved restart failed after rollback; check the service."
   warn "DNS lookup failed after change; previous DNS configuration restored."
   return 1
 }
-if [[ "${UVO_LIB:-0}" == 1 ]]; then return 0 2>/dev/null || exit 0; fi
+if [[ "${UVO_LIB:-0}" == 1 && "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
 while (($#)); do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
@@ -103,6 +118,7 @@ while (($#)); do
   esac
   shift
 done
+if $DNS_ONLY && ! $DO_DNS; then echo "--dns-only cannot be combined with --no-dns" >&2; exit 2; fi
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run with sudo: sudo $0 [options]"
 [[ -r /etc/os-release ]] || die "Cannot identify operating system."
 # shellcheck disable=SC1091
