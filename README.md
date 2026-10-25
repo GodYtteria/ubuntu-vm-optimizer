@@ -9,7 +9,7 @@ Interactive, reusable cleanup script based on the steps tested on a small Ubuntu
 Run on the Ubuntu server:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.2/optimize-ubuntu-server.sh
+curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.3/optimize-ubuntu-server.sh
 chmod +x optimize-ubuntu-server.sh
 sudo ./optimize-ubuntu-server.sh --dry-run
 sudo ./optimize-ubuntu-server.sh --expand-lvm

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-VERSION="0.0.2"
+VERSION="0.0.3"
 DRY_RUN=false
 ASSUME_YES=false
 DO_LVM=false
