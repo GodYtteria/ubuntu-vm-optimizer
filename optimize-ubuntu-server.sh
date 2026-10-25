@@ -8,8 +8,19 @@ DO_LVM=false
 DO_OPTIONAL=true
 DO_SNAP=true
 DO_UPGRADE=true
+DO_DNS=true
+DNS_ONLY=false
 INCLUDE_PHASED=false
 LOG_FILE="/var/log/ubuntu-server-optimizer.log"
+RESOLVED_DIR="${UVO_RESOLVED_DIR:-/etc/systemd/resolved.conf.d}"
+RESOLVED_RESTART_CMD="${UVO_RESOLVED_RESTART_CMD:-systemctl restart systemd-resolved}"
+RESOLVED_ACTIVE_CMD="${UVO_RESOLVED_ACTIVE_CMD:-systemctl is-active --quiet systemd-resolved}"
+DNS_VERIFY_CMD="${UVO_DNS_VERIFY_CMD:-timeout 10 getent hosts example.com}"
+DNS_CONF='[Resolve]
+DNS=94.140.14.14#dns.adguard-dns.com 94.140.15.15#dns.adguard-dns.com 1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com
+FallbackDNS=8.8.8.8#dns.google 8.8.4.4#dns.google
+DNSOverTLS=opportunistic
+'
 
 usage() {
 cat <<'EOF'
@@ -23,6 +34,8 @@ Usage: sudo ./optimize-ubuntu-server.sh [options]
   --no-optional   Do not offer optional package removal
   --expand-lvm    Offer root LVM expansion if the VG already has free space
   --no-lvm        Do not offer LVM expansion
+  --no-dns        Do not set DNS resolvers
+  --dns-only      Run only the DNS step (AdGuard, Cloudflare, Google fallback)
   -h, --help      Show help
 
 Default interactive run:
@@ -30,6 +43,7 @@ Default interactive run:
 - Set multi-user.target, disable Apport and motd-news.timer if present
 - Clean APT cache; simulate autoremove and ask before applying
 - Offer removal of Snap/all Snap apps and optional packages
+- Set DNS via systemd-resolved drop-in: AdGuard, Cloudflare, Google fallback; per-link DNS untouched
 - Report memory, disk, failed services, enabled services, boot time and slow units
 LVM expansion is OFF by default. It only uses existing free VG space; it does not
 resize the virtual disk, partition or physical volume. Does not install Docker.
@@ -54,6 +68,24 @@ confirm_optional(){
   read -r -p "$prompt [y/N] " answer
   [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]
 }
+dns_run(){ local -a cmd; IFS=' ' read -ra cmd <<<"$1"; "${cmd[@]}"; }
+dns_step(){
+  local conf="$RESOLVED_DIR/dns.conf" backup="$RESOLVED_DIR/dns.conf.bak" tmp="$RESOLVED_DIR/dns.conf.new"
+  if ! dns_run "$RESOLVED_ACTIVE_CMD" >/dev/null 2>&1; then log "systemd-resolved is not active; skipping DNS step."; return 0; fi
+  if [[ -f "$conf" && "$(<"$conf")" == "${DNS_CONF%$'\n'}" ]]; then log "DNS drop-in already up to date."; return 0; fi
+  if $DRY_RUN; then printf '[DRY-RUN] Would write %s and restart systemd-resolved\n' "$conf"; return 0; fi
+  mkdir -p "$RESOLVED_DIR"
+  local had_old=false
+  if [[ -f "$conf" ]]; then cp -p "$conf" "$backup"; had_old=true; log "Backed up existing DNS drop-in to $backup"; fi
+  printf '%s' "$DNS_CONF" >"$tmp"; chmod 644 "$tmp"; mv "$tmp" "$conf"
+  dns_run "$RESOLVED_RESTART_CMD" >>"$LOG_FILE" 2>&1 || warn "systemd-resolved restart reported an error."
+  if dns_run "$DNS_VERIFY_CMD" >>"$LOG_FILE" 2>&1; then log "DNS resolvers set and lookup verified."; return 0; fi
+  if $had_old; then mv "$backup" "$conf"; else rm -f "$conf"; fi
+  dns_run "$RESOLVED_RESTART_CMD" >>"$LOG_FILE" 2>&1 || true
+  warn "DNS lookup failed after change; previous DNS configuration restored."
+  return 1
+}
+if [[ "${UVO_LIB:-0}" == 1 ]]; then return 0 2>/dev/null || exit 0; fi
 while (($#)); do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
@@ -64,6 +96,8 @@ while (($#)); do
     --no-optional) DO_OPTIONAL=false ;;
     --expand-lvm) DO_LVM=true ;;
     --no-lvm) DO_LVM=false ;;
+    --no-dns) DO_DNS=false ;;
+    --dns-only) DNS_ONLY=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -80,6 +114,11 @@ mkdir -p /var/log; touch "$LOG_FILE"; chmod 600 "$LOG_FILE" || true
 
 log "Ubuntu Server Optimizer v${VERSION} — ${PRETTY_NAME:-Ubuntu}"
 log "Log file: $LOG_FILE"
+if $DNS_ONLY; then
+  if ! $DRY_RUN && ! confirm "Set DNS resolvers via systemd-resolved?"; then log "Cancelled."; exit 0; fi
+  dns_step || die "DNS step failed."
+  exit 0
+fi
 log "No Docker install or VM CPU/RAM changes will be performed."
 log "Create a VM snapshot/backup before changing a production server."
 hostnamectl 2>/dev/null | tee -a "$LOG_FILE" || true
@@ -88,9 +127,9 @@ printf '\n--- root filesystem ---\n' | tee -a "$LOG_FILE"; df -h / 2>&1 | tee -a
 printf '\n--- root source ---\n' | tee -a "$LOG_FILE"; findmnt -no SOURCE,FSTYPE / 2>&1 | tee -a "$LOG_FILE" || true
 if ! $DRY_RUN && ! confirm "Apply conservative headless-server optimizations?"; then log "Cancelled."; exit 0; fi
 
-log "1/7: Set default target to multi-user.target."
+log "1/8: Set default target to multi-user.target."
 run systemctl set-default multi-user.target
-log "2/7: Disable Apport and motd-news.timer when present."
+log "2/8: Disable Apport and motd-news.timer when present."
 if systemctl list-unit-files --no-legend apport.service 2>/dev/null | awk '{print $1}' | grep -qx apport.service; then
   run systemctl disable --now apport.service || warn "Could not disable Apport."
 fi
@@ -98,7 +137,7 @@ if systemctl list-unit-files --no-legend motd-news.timer 2>/dev/null | awk '{pri
   run systemctl disable --now motd-news.timer || warn "Could not disable motd-news timer."
 fi
 
-log "3/7: APT update/upgrade, cache cleanup, and autoremove review."
+log "3/8: APT update/upgrade, cache cleanup, and autoremove review."
 if $DO_UPGRADE; then
   log "Refreshing APT package indexes."
   run apt-get update
@@ -132,7 +171,7 @@ else
   if confirm_optional "Run apt autoremove --purge using the plan above?"; then run apt-get autoremove --purge; else log "Skipped autoremove."; fi
 fi
 
-log "4/7: Optional packages."
+log "4/8: Optional packages."
 if $DO_OPTIONAL; then
   optional=(modemmanager packagekit open-iscsi multipath-tools)
   installed=()
@@ -149,7 +188,7 @@ if $DO_OPTIONAL; then
   else log "No listed optional packages installed."; fi
 else log "Optional package removal disabled by flag."; fi
 
-log "5/7: Optional Snap removal."
+log "5/8: Optional Snap removal."
 if $DO_SNAP; then
   if command -v snap >/dev/null 2>&1 && dpkg-query -W -f='${db:Status-Status}' snapd 2>/dev/null | grep -qx installed; then
     snap list 2>&1 | tee -a "$LOG_FILE" || true
@@ -163,7 +202,7 @@ if $DO_SNAP; then
   else log "Snap is not installed."; fi
 else log "Snap removal disabled by flag."; fi
 
-log "6/7: Optional root LVM expansion."
+log "6/8: Optional root LVM expansion."
 if $DO_LVM; then
   if command -v lvs >/dev/null 2>&1 && command -v vgs >/dev/null 2>&1 && command -v lvextend >/dev/null 2>&1; then
     root_source="$(findmnt -nro SOURCE / 2>/dev/null || true)"
@@ -187,7 +226,10 @@ if $DO_LVM; then
   else log "LVM tools not installed; skipping."; fi
 else log "LVM expansion disabled. Use --expand-lvm to offer it."; fi
 
-log "7/7: Final diagnostics."
+log "7/8: DNS resolvers."
+if $DO_DNS; then dns_step || die "DNS step failed."; else log "DNS step disabled by --no-dns."; fi
+
+log "8/8: Final diagnostics."
 printf '\n--- default target ---\n' | tee -a "$LOG_FILE"; systemctl get-default 2>&1 | tee -a "$LOG_FILE" || true
 printf '\n--- failed units ---\n' | tee -a "$LOG_FILE"; systemctl --failed --no-pager 2>&1 | tee -a "$LOG_FILE" || true
 printf '\n--- memory ---\n' | tee -a "$LOG_FILE"; free -h 2>&1 | tee -a "$LOG_FILE" || true

@@ -25,6 +25,7 @@ Changed without asking:
 - Default boot target set to `multi-user.target` (desktop packages stay installed).
 - `apport.service` and `motd-news.timer` disabled, if present.
 - APT package cache cleared.
+- DNS resolvers set through `/etc/systemd/resolved.conf.d/dns.conf`: AdGuard first, Cloudflare next, Google as fallback, with opportunistic DNS over TLS. Skipped when `systemd-resolved` is not running. The file is only rewritten when its content differs, and an existing file is saved as `dns.conf.bak` first. After the restart a lookup of `example.com` must work; if it fails, the old file is restored (or the new one removed) and the script exits with an error. Per-link DNS (for example Tailscale's `100.100.100.100`), `/etc/resolv.conf` and netplan are not touched. Skip with `--no-dns`, or run only this step with `--dns-only`.
 
 Asked before each action (answer `y` to run):
 - `apt-get upgrade` after `apt-get update` and a simulated upgrade plan (phased updates stay phased; skip with `--no-upgrade`, include them with `--include-phased`).
@@ -35,7 +36,7 @@ Asked before each action (answer `y` to run):
 
 Never touched: SSH, Tailscale, UFW, core networking, cloud-init. Docker is not installed. CPU and RAM are not changed.
 
-Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optional`, `--expand-lvm`, `--no-lvm`, `-y` (skips only the first prompt; removals still ask).
+Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optional`, `--expand-lvm`, `--no-lvm`, `--no-dns`, `--dns-only`, `-y` (skips only the first prompt; removals still ask).
 
 ## Features
 
@@ -46,6 +47,7 @@ Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optio
 - Offers removal of `modemmanager`, `packagekit`, `open-iscsi`, and `multipath-tools`.
 - Offers removal of Snap and all installed Snap applications.
 - Can offer to extend the root LVM logical volume if the root is on LVM and the VG already has free space. It does not resize the virtual disk, partition, or physical volume.
+- Sets DNS to AdGuard, then Cloudflare, with Google as fallback, and checks that lookups still work.
 - Reports RAM, disk, failed units, enabled services, boot time, and top 20 slow units.
 - Logs to `/var/log/ubuntu-server-optimizer.log`.
 
@@ -60,8 +62,14 @@ Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optio
 --no-optional   Do not offer optional package removal
 --expand-lvm    Offer root LVM expansion if free VG space exists
 --no-lvm        Do not offer LVM expansion
+--no-dns        Do not set DNS resolvers
+--dns-only      Run only the DNS step
 -h, --help      Show help
 ```
+
+## Tests
+
+`bash test-dns.sh` runs the DNS step against a temporary directory with a fake restart command. It checks the first write, no write on a second run, the backup, and the rollback after a failed lookup.
 
 ## Safety
 
@@ -72,7 +80,7 @@ Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optio
 - Do not remove Snap if required applications/services use Snap.
 - Review every APT removal list. `apt autoremove` may remove Ubuntu metapackages (such as `ubuntu-server`) if dependencies are no longer considered required.
 - Cloud-init units are deliberately left alone. They can be important on cloud images and VM templates even if cloud-init currently reports disabled.
-- SSH, Tailscale, UFW, core networking are never disabled.
+- SSH, Tailscale, UFW, core networking are never disabled. The DNS step leaves Tailscale DNS alone.
 - This does not install Docker, tune application/database configuration, change VM CPU/RAM allocation, resize the virtual disk/partition, or guarantee a specific performance gain.
 - The script is interactive by design; it is not intended for blind unattended deployment.
 
