@@ -4,18 +4,36 @@ Interactive, reusable cleanup script based on the steps tested on a small Ubuntu
 
 ![Boot time 17.348 s to 5.847 s (66.3% faster) and 20% less RAM in use](docs/before-after.svg)
 
-## One-click install (Ubuntu Server)
+## One-line install (Ubuntu Server)
 
 Run on the Ubuntu server:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/release/0.0.3/optimize-ubuntu-server.sh
-chmod +x optimize-ubuntu-server.sh
-sudo ./optimize-ubuntu-server.sh --dry-run
-sudo ./optimize-ubuntu-server.sh --expand-lvm
+curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/HEAD/optimize-ubuntu-server.sh | sudo bash
 ```
 
-The first run (`--dry-run`) only prints the plan. The second run applies it and asks before each removal. `--expand-lvm` adds the optional LVM question; leave it off to skip it.
+To run only the DNS step, pass the flag after `-s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/HEAD/optimize-ubuntu-server.sh | sudo bash -s -- --dns-only
+```
+
+If you prefer a fixed, reviewed version instead of the newest one, pin the tag:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.4/optimize-ubuntu-server.sh | sudo bash
+```
+
+When the script is piped, questions are asked on your terminal (`/dev/tty`), never from the downloaded text. With no terminal (cron, cloud-init) every question gets the safe answer No and the script prints that it did so; add `--yes` (`... | sudo bash -s -- --yes`) to answer yes to every question. Nothing runs until the last line of the script is reached, so a cut-off download does nothing.
+
+To read it first, or to run a dry run:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.4/optimize-ubuntu-server.sh
+sudo bash optimize-ubuntu-server.sh --dry-run
+```
+
+The dry run only prints the plan. A normal run asks before each removal. `--expand-lvm` adds the optional LVM question; leave it off to skip it.
 
 ## What it removes or changes
 
@@ -55,7 +73,7 @@ Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optio
 
 ```text
 --dry-run       Print plans without making changes
--y, --yes       Skip the initial confirmation only; removals and LVM expansion still require approval
+-y, --yes       Answer yes to every question (including removals and LVM expansion)
 --no-snap       Do not offer Snap removal
 --no-upgrade    Do not offer package upgrades
 --include-phased Include phased updates (explicit opt-in)

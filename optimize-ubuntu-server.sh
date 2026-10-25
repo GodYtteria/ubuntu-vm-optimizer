@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-VERSION="0.0.3"
+VERSION="0.0.4"
 DRY_RUN=false
 ASSUME_YES=false
+PROMPT_SRC=none
 DO_LVM=false
 DO_OPTIONAL=true
 DO_SNAP=true
@@ -35,7 +36,7 @@ cat <<'EOF'
 Ubuntu Server Optimizer
 Usage: sudo ./optimize-ubuntu-server.sh [options]
   --dry-run       Print planned commands/package plan without changing system
-  -y, --yes       Skip conservative confirmations only; optional removals still require approval
+  -y, --yes       Answer yes to every prompt (including optional removals)
   --no-snap       Do not offer Snap removal
   --no-upgrade    Do not offer package upgrades
   --include-phased Include phased updates in apt upgrade (explicit opt-in)
@@ -45,6 +46,9 @@ Usage: sudo ./optimize-ubuntu-server.sh [options]
   --no-dns        Do not set DNS resolvers
   --dns-only      Run only the DNS step (AdGuard, Cloudflare, Google fallback)
   -h, --help      Show help
+
+When piped (curl ... | sudo bash -s -- [options]) prompts are read from /dev/tty;
+without a terminal the default answer is No and is printed. Use --yes to accept all.
 
 Default interactive run:
 - Check Ubuntu/systemd and show current status
@@ -63,18 +67,21 @@ die(){ warn "$*"; exit 1; }
 run(){
   if $DRY_RUN; then printf '[DRY-RUN]'; printf ' %q' "$@"; printf '\n'; else "$@" 2>&1 | tee -a "$LOG_FILE"; fi
 }
-confirm(){
-  local prompt="$1" answer
-  if $DRY_RUN; then printf '[DRY-RUN] Would ask: %s\n' "$prompt"; return 1; fi
-  if $ASSUME_YES; then return 0; fi
-  read -r -p "$prompt [y/N] " answer
+ask(){
+  local prompt="$1" answer=""
+  if $ASSUME_YES; then printf '[AUTO] --yes given, answering yes: %s\n' "$prompt"; return 0; fi
+  if [[ "$PROMPT_SRC" == none ]]; then printf '[AUTO] no terminal to ask, using default No: %s (use --yes to accept)\n' "$prompt"; return 1; fi
+  printf '%s [y/N] ' "$prompt" >&2
+  read -r answer <"$PROMPT_SRC" || { printf '\n[AUTO] no answer read, using default No\n' >&2; return 1; }
   [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]
 }
+confirm(){
+  if $DRY_RUN; then printf '[DRY-RUN] Would ask: %s\n' "$1"; return 1; fi
+  ask "$1"
+}
 confirm_optional(){
-  local prompt="$1" answer
-  if $DRY_RUN; then printf '[DRY-RUN] Would ask explicit approval: %s\n' "$prompt"; return 1; fi
-  read -r -p "$prompt [y/N] " answer
-  [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]
+  if $DRY_RUN; then printf '[DRY-RUN] Would ask explicit approval: %s\n' "$1"; return 1; fi
+  ask "$1"
 }
 dns_run(){ local -a cmd; IFS=' ' read -ra cmd <<<"$1"; "${cmd[@]}"; }
 dns_default_verify(){ timeout 10 resolvectl query --cache=no example.com; }
@@ -106,6 +113,7 @@ dns_step(){
   return 1
 }
 if [[ "${UVO_LIB:-0}" == 1 && "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
+main(){
 while (($#)); do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
@@ -131,6 +139,11 @@ source /etc/os-release
 [[ "${ID:-}" == ubuntu ]] || die "Ubuntu only. Detected: ${PRETTY_NAME:-unknown}"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required."
 command -v apt-get >/dev/null 2>&1 || die "APT is required."
+if [[ -t 0 ]]; then PROMPT_SRC=/dev/stdin
+else
+  if { : </dev/tty; } 2>/dev/null; then PROMPT_SRC=/dev/tty; fi
+  exec </dev/null
+fi
 mkdir -p /var/log; touch "$LOG_FILE"; chmod 600 "$LOG_FILE" || true
 
 log "Ubuntu Server Optimizer v${VERSION} — ${PRETTY_NAME:-Ubuntu}"
@@ -260,3 +273,5 @@ printf '\n--- boot time ---\n' | tee -a "$LOG_FILE"; systemd-analyze time 2>&1 |
 printf '\n--- slow startup units (top 20) ---\n' | tee -a "$LOG_FILE"; systemd-analyze blame 2>&1 | head -n 20 | tee -a "$LOG_FILE" || true
 log "Finished. Review $LOG_FILE. Verify changes after reboot during a maintenance window."
 log "Cloud-init, SSH, Tailscale, UFW and core networking were not disabled. Docker was not installed."
+}
+main "$@"
