@@ -6,10 +6,6 @@ Interactive, reusable cleanup script based on the steps tested on a small Ubuntu
 
 ## One-line install (Ubuntu Server)
 
-v0.0.4: do not use, apt prompts abort when piped.
-
-v0.0.5: test overrides honoured when piped, use 0.0.6.
-
 Run on the Ubuntu server:
 
 ```bash
@@ -44,6 +40,24 @@ sudo bash optimize-ubuntu-server.sh --dry-run
 ```
 
 The dry run only prints the plan. A normal run asks before each removal. `--expand-lvm` adds the optional LVM question; leave it off to skip it.
+
+## What's new
+
+**0.0.6 (LTS)**
+- One-line install: `curl … | sudo bash`; questions are asked on your terminal, never read from the download.
+- DNS step: AdGuard first, Cloudflare next, Google as fallback, DNS over TLS when available; checked with a live lookup and rolled back on failure.
+- `--dns-only` and `--no-dns`.
+- `--yes` for the normal questions; `--yes-removals` is needed for package removals, the snapd purge and the LVM extend.
+- A cut-off download runs nothing.
+- apt runs non-interactively when piped and keeps your config files.
+
+**0.0.2**
+- Guided `apt-get upgrade` (phased updates respected), `--no-upgrade` and `--include-phased`.
+
+**Do not use**
+- 0.0.4: apt prompts abort when piped.
+- 0.0.5: test overrides are honoured when piped.
+- 0.0.3: superseded by 0.0.6.
 
 ## What it removes or changes
 
