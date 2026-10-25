@@ -6,6 +6,8 @@ Interactive, reusable cleanup script based on the steps tested on a small Ubuntu
 
 ## One-line install (Ubuntu Server)
 
+v0.0.4: do not use, apt prompts abort when piped.
+
 Run on the Ubuntu server:
 
 ```bash
@@ -21,15 +23,21 @@ curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/HEAD
 If you prefer a fixed, reviewed version instead of the newest one, pin the tag:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.4/optimize-ubuntu-server.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.5/optimize-ubuntu-server.sh | sudo bash
 ```
 
-When the script is piped, questions are asked on your terminal (`/dev/tty`), never from the downloaded text. With no terminal (cron, cloud-init) every question gets the safe answer No and the script prints that it did so; add `--yes` (`... | sudo bash -s -- --yes`) to answer yes to every question. Nothing runs until the last line of the script is reached, so a cut-off download does nothing.
+When the script is piped, questions are asked on your terminal (`/dev/tty`), never from the downloaded text. With no terminal (cron, cloud-init) every question gets the safe answer No and the script prints that it did so. Nothing runs until the last line of the script is reached, so a cut-off download does nothing.
+
+Unattended runs use two flags (put them after `-s --`):
+- `--yes` answers yes to the normal questions: start, `apt-get upgrade`, `apt autoremove`.
+- `--yes-removals` also answers yes to the removals: the optional packages (modemmanager, packagekit, open-iscsi, multipath-tools), the snapd purge and the LVM extend. Without it, unattended runs skip them and print "[AUTO] skipped (use --yes-removals)".
+
+Example: `curl -fsSL .../optimize-ubuntu-server.sh | sudo bash -s -- --yes`
 
 To read it first, or to run a dry run:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.4/optimize-ubuntu-server.sh
+curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.5/optimize-ubuntu-server.sh
 sudo bash optimize-ubuntu-server.sh --dry-run
 ```
 
@@ -73,7 +81,8 @@ Flags: `--dry-run`, `--no-snap`, `--no-upgrade`, `--include-phased`, `--no-optio
 
 ```text
 --dry-run       Print plans without making changes
--y, --yes       Answer yes to every question (including removals and LVM expansion)
+-y, --yes       Answer yes to the normal questions (start, upgrade, autoremove)
+--yes-removals  Also answer yes to removals: optional packages (modemmanager, packagekit, open-iscsi, multipath-tools), snapd purge, LVM extend
 --no-snap       Do not offer Snap removal
 --no-upgrade    Do not offer package upgrades
 --include-phased Include phased updates (explicit opt-in)

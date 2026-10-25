@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-VERSION="0.0.4"
+VERSION="0.0.5"
 DRY_RUN=false
 ASSUME_YES=false
+ASSUME_REMOVALS=false
+OS_RELEASE_FILE="/etc/os-release"
+TTY_PATH="/dev/tty"
+APT_Y=(env DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confold)
 PROMPT_SRC=none
 DO_LVM=false
 DO_OPTIONAL=true
@@ -18,7 +22,9 @@ RESOLVED_RESTART_CMD="systemctl restart systemd-resolved"
 RESOLVED_ACTIVE_CMD="systemctl is-active --quiet systemd-resolved"
 DNS_VERIFY_CMD="dns_default_verify"
 DNS_GLOBAL_CMD="dns_default_global"
-if [[ "${UVO_TEST:-0}" == 1 && "${BASH_SOURCE[0]}" != "$0" ]]; then
+if [[ "${UVO_TEST:-0}" == 1 && "${BASH_SOURCE[0]:-}" != "$0" ]]; then
+  OS_RELEASE_FILE="${UVO_OS_RELEASE_FILE:-$OS_RELEASE_FILE}"
+  TTY_PATH="${UVO_TTY_PATH:-$TTY_PATH}"
   RESOLVED_DIR="${UVO_RESOLVED_DIR:-$RESOLVED_DIR}"
   RESOLVED_RESTART_CMD="${UVO_RESOLVED_RESTART_CMD:-$RESOLVED_RESTART_CMD}"
   RESOLVED_ACTIVE_CMD="${UVO_RESOLVED_ACTIVE_CMD:-$RESOLVED_ACTIVE_CMD}"
@@ -36,7 +42,9 @@ cat <<'EOF'
 Ubuntu Server Optimizer
 Usage: sudo ./optimize-ubuntu-server.sh [options]
   --dry-run       Print planned commands/package plan without changing system
-  -y, --yes       Answer yes to every prompt (including optional removals)
+  -y, --yes       Answer yes to the normal prompts (upgrade, autoremove, start)
+  --yes-removals  Also answer yes to removals: optional packages (modemmanager,
+                  packagekit, open-iscsi, multipath-tools), snapd purge, LVM extend
   --no-snap       Do not offer Snap removal
   --no-upgrade    Do not offer package upgrades
   --include-phased Include phased updates in apt upgrade (explicit opt-in)
@@ -48,7 +56,8 @@ Usage: sudo ./optimize-ubuntu-server.sh [options]
   -h, --help      Show help
 
 When piped (curl ... | sudo bash -s -- [options]) prompts are read from /dev/tty;
-without a terminal the default answer is No and is printed. Use --yes to accept all.
+without a terminal the default answer is No and is printed. Use --yes to accept the normal prompts and
+--yes-removals for the removals (otherwise they are skipped when unattended).
 
 Default interactive run:
 - Check Ubuntu/systemd and show current status
@@ -83,6 +92,18 @@ confirm_optional(){
   if $DRY_RUN; then printf '[DRY-RUN] Would ask explicit approval: %s\n' "$1"; return 1; fi
   ask "$1"
 }
+confirm_removal(){
+  if $DRY_RUN; then printf '[DRY-RUN] Would ask explicit approval: %s\n' "$1"; return 1; fi
+  if $ASSUME_REMOVALS; then printf '[AUTO] --yes-removals given, answering yes: %s\n' "$1"; return 0; fi
+  if $ASSUME_YES; then printf '[AUTO] skipped (use --yes-removals): %s\n' "$1"; return 1; fi
+  ask "$1"
+}
+os_release_value(){ sed -n "s/^$1=//p" "$OS_RELEASE_FILE" | head -n1 | tr -d '"'; }
+select_prompt_src(){
+  if [[ -t 0 ]]; then PROMPT_SRC=/dev/stdin
+  elif { : <"$TTY_PATH"; } 2>/dev/null; then PROMPT_SRC="$TTY_PATH"
+  else PROMPT_SRC=none; fi
+}
 dns_run(){ local -a cmd; IFS=' ' read -ra cmd <<<"$1"; "${cmd[@]}"; }
 dns_default_verify(){ timeout 10 resolvectl query --cache=no example.com; }
 dns_global_ok(){ awk '$1=="Global:"{for(i=2;i<=NF;i++){split($i,a,"#"); if(a[1]=="94.140.14.14")f=1}} END{exit !f}'; }
@@ -112,12 +133,12 @@ dns_step(){
   if $restored; then warn "DNS lookup failed after change; previous DNS configuration restored."; else warn "DNS lookup failed after change; restore failed: $conf"; fi
   return 1
 }
-if [[ "${UVO_LIB:-0}" == 1 && "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
 main(){
 while (($#)); do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
     -y|--yes) ASSUME_YES=true ;;
+    --yes-removals) ASSUME_REMOVALS=true ;;
     --no-snap) DO_SNAP=false ;;
     --no-upgrade) DO_UPGRADE=false ;;
     --include-phased) INCLUDE_PHASED=true ;;
@@ -132,19 +153,15 @@ while (($#)); do
   shift
 done
 if $DNS_ONLY && ! $DO_DNS; then echo "--dns-only cannot be combined with --no-dns" >&2; exit 2; fi
-[[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run with sudo: sudo $0 [options]"
-[[ -r /etc/os-release ]] || die "Cannot identify operating system."
-# shellcheck disable=SC1091
-source /etc/os-release
-[[ "${ID:-}" == ubuntu ]] || die "Ubuntu only. Detected: ${PRETTY_NAME:-unknown}"
+[[ "$(id -u)" -eq 0 ]] || die "Run with sudo: sudo $0 [options]"
+[[ -r "$OS_RELEASE_FILE" ]] || die "Cannot identify operating system."
+OS_ID="$(os_release_value ID)"; PRETTY_NAME="$(os_release_value PRETTY_NAME)"
+[[ "$OS_ID" == ubuntu ]] || die "Ubuntu only. Detected: ${PRETTY_NAME:-unknown}"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required."
 command -v apt-get >/dev/null 2>&1 || die "APT is required."
-if [[ -t 0 ]]; then PROMPT_SRC=/dev/stdin
-else
-  if { : </dev/tty; } 2>/dev/null; then PROMPT_SRC=/dev/tty; fi
-  exec </dev/null
-fi
-mkdir -p /var/log; touch "$LOG_FILE"; chmod 600 "$LOG_FILE" || true
+select_prompt_src
+if [[ ! -t 0 ]]; then exec </dev/null; fi
+mkdir -p "$(dirname "$LOG_FILE")"; touch "$LOG_FILE"; chmod 600 "$LOG_FILE" || true
 
 log "Ubuntu Server Optimizer v${VERSION} — ${PRETTY_NAME:-Ubuntu}"
 log "Log file: $LOG_FILE"
@@ -183,12 +200,12 @@ if $DO_UPGRADE; then
     if $INCLUDE_PHASED; then
       warn "Including phased updates overrides Ubuntu's staged rollout policy."
       if confirm_optional "Run apt upgrade including phased updates?"; then
-        run apt-get -o APT::Get::Always-Include-Phased-Updates=true upgrade
+        run "${APT_Y[@]}" -o APT::Get::Always-Include-Phased-Updates=true upgrade
       else
         log "Skipped phased-inclusive upgrade."
       fi
     elif confirm_optional "Install currently offered upgrades with apt-get upgrade? Phased updates remain phased."; then
-      run apt-get upgrade
+      run "${APT_Y[@]}" upgrade
     else
       log "Skipped package upgrades."
     fi
@@ -202,7 +219,7 @@ if $DRY_RUN; then
   apt-get -s autoremove --purge 2>&1 || true
 else
   apt-get -s autoremove --purge 2>&1 | tee -a "$LOG_FILE" || true
-  if confirm_optional "Run apt autoremove --purge using the plan above?"; then run apt-get autoremove --purge; else log "Skipped autoremove."; fi
+  if confirm_optional "Run apt autoremove --purge using the plan above?"; then run "${APT_Y[@]}" autoremove --purge; else log "Skipped autoremove."; fi
 fi
 
 log "4/8: Optional packages."
@@ -215,9 +232,9 @@ if $DO_OPTIONAL; then
   if ((${#installed[@]})); then
     printf 'Installed optional packages: %s\n' "${installed[*]}" | tee -a "$LOG_FILE"
     warn "Do not remove modemmanager with cellular hardware, open-iscsi with iSCSI, or multipath-tools with multipath storage."
-    if confirm_optional "Purge all listed optional packages (${installed[*]})?"; then
-      run apt-get purge "${installed[@]}"
-      if confirm_optional "Run apt autoremove --purge after optional package removal?"; then run apt-get autoremove --purge; fi
+    if confirm_removal "Purge all listed optional packages (${installed[*]})?"; then
+      run "${APT_Y[@]}" purge "${installed[@]}"
+      if confirm_optional "Run apt autoremove --purge after optional package removal?"; then run "${APT_Y[@]}" autoremove --purge; fi
     else log "Skipped optional package removal."; fi
   else log "No listed optional packages installed."; fi
 else log "Optional package removal disabled by flag."; fi
@@ -227,11 +244,11 @@ if $DO_SNAP; then
   if command -v snap >/dev/null 2>&1 && dpkg-query -W -f='${db:Status-Status}' snapd 2>/dev/null | grep -qx installed; then
     snap list 2>&1 | tee -a "$LOG_FILE" || true
     warn "This removes ALL Snap applications; required Snap apps/services will stop working."
-    if confirm_optional "Remove all Snap apps and purge snapd?"; then
+    if confirm_removal "Remove all Snap apps and purge snapd?"; then
       mapfile -t snap_names < <(snap list 2>/dev/null | awk 'NR>1 {print $1}' | grep -v '^snapd$' || true)
       for name in "${snap_names[@]}"; do run snap remove "$name" || warn "Could not remove snap $name; continuing."; done
-      run apt-get purge snapd
-      if confirm_optional "Run apt autoremove --purge after Snap removal?"; then run apt-get autoremove --purge; fi
+      run "${APT_Y[@]}" purge snapd
+      if confirm_optional "Run apt autoremove --purge after Snap removal?"; then run "${APT_Y[@]}" autoremove --purge; fi
     else log "Skipped Snap removal."; fi
   else log "Snap is not installed."; fi
 else log "Snap removal disabled by flag."; fi
@@ -254,7 +271,7 @@ if $DO_LVM; then
       if [[ "${vg_free:-0}" =~ ^[0-9]+$ ]] && (( vg_free > 1048576 )); then
         log "Root LV: $root_lv; free VG space: ${vg_free} bytes; filesystem: ${root_type:-unknown}"
         warn "This uses only free space already in the VG; it does not enlarge the VM disk or partition."
-        if confirm_optional "Extend root LV and filesystem using all free VG space?"; then run lvextend -l +100%FREE -r "$root_lv"; else log "Skipped LVM expansion."; fi
+        if confirm_removal "Extend root LV and filesystem using all free VG space?"; then run lvextend -l +100%FREE -r "$root_lv"; else log "Skipped LVM expansion."; fi
       else log "No meaningful free space in the root VG; skipping."; fi
     else log "Root is not safely identifiable as an LVM LV; skipping."; fi
   else log "LVM tools not installed; skipping."; fi
@@ -274,4 +291,5 @@ printf '\n--- slow startup units (top 20) ---\n' | tee -a "$LOG_FILE"; systemd-a
 log "Finished. Review $LOG_FILE. Verify changes after reboot during a maintenance window."
 log "Cloud-init, SSH, Tailscale, UFW and core networking were not disabled. Docker was not installed."
 }
+if [[ "${UVO_LIB:-0}" == 1 && "${BASH_SOURCE[0]:-}" != "$0" ]]; then return 0; fi
 main "$@"
