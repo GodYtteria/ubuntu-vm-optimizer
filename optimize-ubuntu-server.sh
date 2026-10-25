@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-VERSION="0.0.5"
+VERSION="0.0.6"
 DRY_RUN=false
 ASSUME_YES=false
 ASSUME_REMOVALS=false
@@ -22,7 +22,9 @@ RESOLVED_RESTART_CMD="systemctl restart systemd-resolved"
 RESOLVED_ACTIVE_CMD="systemctl is-active --quiet systemd-resolved"
 DNS_VERIFY_CMD="dns_default_verify"
 DNS_GLOBAL_CMD="dns_default_global"
-if [[ "${UVO_TEST:-0}" == 1 && "${BASH_SOURCE[0]:-}" != "$0" ]]; then
+SOURCED=false
+if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "$0" ]]; then SOURCED=true; fi
+if $SOURCED && [[ "${UVO_TEST:-0}" == 1 ]]; then
   OS_RELEASE_FILE="${UVO_OS_RELEASE_FILE:-$OS_RELEASE_FILE}"
   TTY_PATH="${UVO_TTY_PATH:-$TTY_PATH}"
   RESOLVED_DIR="${UVO_RESOLVED_DIR:-$RESOLVED_DIR}"
@@ -98,7 +100,12 @@ confirm_removal(){
   if $ASSUME_YES; then printf '[AUTO] skipped (use --yes-removals): %s\n' "$1"; return 1; fi
   ask "$1"
 }
-os_release_value(){ sed -n "s/^$1=//p" "$OS_RELEASE_FILE" | head -n1 | tr -d '"'; }
+os_release_value(){
+  local v re_double='^"(.*)"$' re_single="^'(.*)'\$"
+  v="$(sed -n "s/^$1=//p" "$OS_RELEASE_FILE" | head -n1)"
+  if [[ "$v" =~ $re_double || "$v" =~ $re_single ]]; then v="${BASH_REMATCH[1]}"; fi
+  printf '%s\n' "$v"
+}
 select_prompt_src(){
   if [[ -t 0 ]]; then PROMPT_SRC=/dev/stdin
   elif { : <"$TTY_PATH"; } 2>/dev/null; then PROMPT_SRC="$TTY_PATH"
@@ -291,5 +298,4 @@ printf '\n--- slow startup units (top 20) ---\n' | tee -a "$LOG_FILE"; systemd-a
 log "Finished. Review $LOG_FILE. Verify changes after reboot during a maintenance window."
 log "Cloud-init, SSH, Tailscale, UFW and core networking were not disabled. Docker was not installed."
 }
-if [[ "${UVO_LIB:-0}" == 1 && "${BASH_SOURCE[0]:-}" != "$0" ]]; then return 0; fi
-main "$@"
+if $SOURCED && [[ "${UVO_LIB:-0}" == 1 ]]; then return 0; else main "$@"; fi

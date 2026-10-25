@@ -8,6 +8,8 @@ Interactive, reusable cleanup script based on the steps tested on a small Ubuntu
 
 v0.0.4: do not use, apt prompts abort when piped.
 
+v0.0.5: test overrides honoured when piped, use 0.0.6.
+
 Run on the Ubuntu server:
 
 ```bash
@@ -23,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/HEAD
 If you prefer a fixed, reviewed version instead of the newest one, pin the tag:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.5/optimize-ubuntu-server.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.6/optimize-ubuntu-server.sh | sudo bash
 ```
 
 When the script is piped, questions are asked on your terminal (`/dev/tty`), never from the downloaded text. With no terminal (cron, cloud-init) every question gets the safe answer No and the script prints that it did so. Nothing runs until the last line of the script is reached, so a cut-off download does nothing.
@@ -37,7 +39,7 @@ Example: `curl -fsSL .../optimize-ubuntu-server.sh | sudo bash -s -- --yes`
 To read it first, or to run a dry run:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.5/optimize-ubuntu-server.sh
+curl -fsSLO https://raw.githubusercontent.com/GodYtteria/ubuntu-vm-optimizer/v0.0.6/optimize-ubuntu-server.sh
 sudo bash optimize-ubuntu-server.sh --dry-run
 ```
 
