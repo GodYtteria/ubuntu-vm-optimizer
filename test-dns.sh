@@ -64,5 +64,26 @@ checkv "overrides ignored without UVO_TEST" [ "$leak" = "/etc/systemd/resolved.c
 rc=0; out="$(UVO_LIB=0 bash "$here/optimize-ubuntu-server.sh" --dns-only --no-dns 2>&1)" || rc=$?
 checkv "dns-only with no-dns exits 2" [ "$rc" -eq 2 ]
 checkv "dns-only with no-dns explains" [ "$out" = "--dns-only cannot be combined with --no-dns" ]
+printf '%s' "$DNS_CONF" >"$UVO_RESOLVED_DIR/dns.conf"
+rm -f "$conf"; mkdir "$UVO_RESOLVED_DIR/90-uvo-dns.conf.new"
+rc=0; dns_step >/dev/null 2>&1 || rc=$?
+checkv "failed write keeps legacy dns.conf" [ -f "$UVO_RESOLVED_DIR/dns.conf" ]
+rmdir "$UVO_RESOLVED_DIR/90-uvo-dns.conf.new"; rm -f "$UVO_RESOLVED_DIR/dns.conf"
+printf '[Resolve]\nDNS=9.9.9.9\n' >"$conf"
+DNS_VERIFY_CMD="false"
+mv(){ [[ "$1" == *.bak ]] && return 1; command mv "$@"; }
+rc=0; dns_step >"$work/out" 2>&1 || rc=$?
+unset -f mv
+checkv "failed restore returns nonzero" [ "$rc" -ne 0 ]
+checkv "failed restore warns restore failed" grep -q "restore failed: $conf" "$work/out"
+checkv "failed restore does not claim restored" bash -c '! grep -q "configuration restored" "$1"' _ "$work/out"
+DNS_VERIFY_CMD="true"
+rm -f "$conf" "$UVO_RESOLVED_DIR/90-uvo-dns.conf.bak"
+checkv "global check accepts adguard" bash -c 'source "$1"; printf "Global: 94.140.14.14#dns.adguard-dns.com 1.1.1.1\nLink 2 (eth0): 10.0.0.1\n" | dns_global_ok' _ "$here/optimize-ubuntu-server.sh"
+checkv "global check rejects 94.140.14.140" bash -c '! { source "$1"; printf "Global: 94.140.14.140 94.140.15.140\n" | dns_global_ok; }' _ "$here/optimize-ubuntu-server.sh"
+checkv "global check ignores link lines" bash -c '! { source "$1"; printf "Link 2 (eth0): 94.140.14.14\n" | dns_global_ok; }' _ "$here/optimize-ubuntu-server.sh"
+trace="$(UVO_TEST=1 UVO_RESOLVED_DIR=/evil UVO_RESOLVED_RESTART_CMD=evil UVO_DNS_VERIFY_CMD=evil bash -x "$here/optimize-ubuntu-server.sh" --help 2>&1 >/dev/null)"
+checkv "direct run never assigns overrides" bash -c '! grep -q "evil" <<<"$1"' _ "$trace"
+checkv "direct run keeps default dir" grep -q "^+ RESOLVED_DIR=/etc/systemd/resolved.conf.d" <<<"$trace"
 echo "failures=$fails"
 [[ $fails -eq 0 ]]

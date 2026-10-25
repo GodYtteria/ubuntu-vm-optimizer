@@ -17,7 +17,7 @@ RESOLVED_RESTART_CMD="systemctl restart systemd-resolved"
 RESOLVED_ACTIVE_CMD="systemctl is-active --quiet systemd-resolved"
 DNS_VERIFY_CMD="dns_default_verify"
 DNS_GLOBAL_CMD="dns_default_global"
-if [[ "${UVO_TEST:-0}" == 1 ]]; then
+if [[ "${UVO_TEST:-0}" == 1 && "${BASH_SOURCE[0]}" != "$0" ]]; then
   RESOLVED_DIR="${UVO_RESOLVED_DIR:-$RESOLVED_DIR}"
   RESOLVED_RESTART_CMD="${UVO_RESOLVED_RESTART_CMD:-$RESOLVED_RESTART_CMD}"
   RESOLVED_ACTIVE_CMD="${UVO_RESOLVED_ACTIVE_CMD:-$RESOLVED_ACTIVE_CMD}"
@@ -78,14 +78,18 @@ confirm_optional(){
 }
 dns_run(){ local -a cmd; IFS=' ' read -ra cmd <<<"$1"; "${cmd[@]}"; }
 dns_default_verify(){ timeout 10 resolvectl query --cache=no example.com; }
-dns_default_global(){ resolvectl dns | grep -E '^Global' | grep -q '94\.140\.14\.14'; }
+dns_global_ok(){ awk '$1=="Global:"{for(i=2;i<=NF;i++){split($i,a,"#"); if(a[1]=="94.140.14.14")f=1}} END{exit !f}'; }
+dns_default_global(){ resolvectl dns | dns_global_ok; }
+dns_remove_legacy(){
+  local legacy="$RESOLVED_DIR/dns.conf"
+  [[ -f "$legacy" && "$(<"$legacy")" == "${DNS_CONF%$'\n'}" ]] || return 0
+  if $DRY_RUN; then printf '[DRY-RUN] Would remove legacy %s\n' "$legacy"; return 0; fi
+  rm -f "$legacy" || { warn "Could not remove legacy $legacy"; return 1; }
+}
 dns_step(){
-  local conf="$RESOLVED_DIR/90-uvo-dns.conf" backup="$RESOLVED_DIR/90-uvo-dns.conf.bak" tmp="$RESOLVED_DIR/90-uvo-dns.conf.new" legacy="$RESOLVED_DIR/dns.conf"
+  local conf="$RESOLVED_DIR/90-uvo-dns.conf" backup="$RESOLVED_DIR/90-uvo-dns.conf.bak" tmp="$RESOLVED_DIR/90-uvo-dns.conf.new"
   if ! dns_run "$RESOLVED_ACTIVE_CMD" >/dev/null 2>&1; then log "systemd-resolved is not active; skipping DNS step."; return 0; fi
-  if [[ -f "$legacy" && "$(<"$legacy")" == "${DNS_CONF%$'\n'}" ]]; then
-    if $DRY_RUN; then printf '[DRY-RUN] Would remove legacy %s\n' "$legacy"; else rm -f "$legacy" || { warn "Could not remove legacy $legacy"; return 1; }; fi
-  fi
-  if [[ -f "$conf" && "$(<"$conf")" == "${DNS_CONF%$'\n'}" ]]; then log "DNS drop-in already up to date."; return 0; fi
+  if [[ -f "$conf" && "$(<"$conf")" == "${DNS_CONF%$'\n'}" ]]; then log "DNS drop-in already up to date."; dns_remove_legacy; return; fi
   if $DRY_RUN; then printf '[DRY-RUN] Would write %s and restart systemd-resolved\n' "$conf"; return 0; fi
   mkdir -p "$RESOLVED_DIR" || { warn "Could not create $RESOLVED_DIR"; return 1; }
   local had_old=false
@@ -94,10 +98,11 @@ dns_step(){
     rm -f "$tmp"; warn "Could not write $conf; existing DNS configuration left as is."; return 1
   fi
   dns_run "$RESOLVED_RESTART_CMD" >>"$LOG_FILE" 2>&1 || warn "systemd-resolved restart reported an error."
-  if dns_run "$DNS_VERIFY_CMD" >>"$LOG_FILE" 2>&1 && dns_run "$DNS_GLOBAL_CMD" >>"$LOG_FILE" 2>&1; then log "DNS resolvers set and lookup verified."; return 0; fi
-  if $had_old; then mv "$backup" "$conf"; else rm -f "$conf"; fi
+  if dns_run "$DNS_VERIFY_CMD" >>"$LOG_FILE" 2>&1 && dns_run "$DNS_GLOBAL_CMD" >>"$LOG_FILE" 2>&1; then log "DNS resolvers set and lookup verified."; dns_remove_legacy; return; fi
+  local restored=true
+  if $had_old; then mv "$backup" "$conf" || restored=false; else rm -f "$conf" || restored=false; fi
   dns_run "$RESOLVED_RESTART_CMD" >>"$LOG_FILE" 2>&1 || warn "systemd-resolved restart failed after rollback; check the service."
-  warn "DNS lookup failed after change; previous DNS configuration restored."
+  if $restored; then warn "DNS lookup failed after change; previous DNS configuration restored."; else warn "DNS lookup failed after change; restore failed: $conf"; fi
   return 1
 }
 if [[ "${UVO_LIB:-0}" == 1 && "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
